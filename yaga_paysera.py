@@ -1,4 +1,5 @@
 import time
+import math
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
@@ -24,7 +25,7 @@ WRISTBAND_HEADER = "Number of WRIST BANDS"
 CAMPER_PASS_HEADER = "CAMPER PASS"
 FULLPASS_LABEL = "FULL PASS ★"
 MAINPARKING_LABEL = "MAIN PARKING ★"
-CAMPERPASS_LABEL  = "CAMPER PASS + ELECTRICITY"
+CAMPERPASS_LABEL  = "CAMPER PASS + ELECTRICITY ★"
 INV_SENT_HEADER = "Invitations SENT"
 PARKING_SENT_HEADER = "Main parking SENT"
 CAMPER_SENT_HEADER = "Camper SENT"
@@ -192,124 +193,154 @@ try:
             continue
 
         print(f"\nRow {i}: Processing {name_cell} / {email_cell} / Parking: {main_parking_count} / Wristbands: {wristbands_count} / Camper: {has_camper_pass}")
-        driver.get(DASHBOARD_URL)
-        wait_for_xpath("//div[contains(text(),'Yaga Gathering')]")
-        driver.execute_script('let el=document.querySelector("chrome-signin-app");if(el)el.remove();')
 
-        # --- Click "Kurti užsakymą", handle tab ---
-        switched = False
-        main_tab = None
-        try:
-            order_btn = WebDriverWait(driver, 30).until(
-                EC.element_to_be_clickable(
-                    (By.CSS_SELECTOR, '[class*="MuiCardActions-root"] a[title="Kurti užsakymą"][href*="yaga"]')
-                )
-            )
-            switched, main_tab = click_and_tab_handling(order_btn)
-            wait_ready_state()
-            time.sleep(3)
+        # --- Support for multiple submissions if wristbands or main parking >10 ---
+        wristbands_total = int(wristbands_count)
+        parking_total = int(main_parking_count)
+        camper_total = 1 if has_camper_pass else 0
 
-            # --- Wait for Event Page ---
-            wait_for_xpath("//bdo[contains(text(),'Yaga Gathering 2025')]", visible=True)
+        num_wristband_loops = math.ceil(wristbands_total / 10) if wristbands_total > 0 else 0
+        num_parking_loops   = math.ceil(parking_total   / 10) if parking_total   > 0 else 0
+        max_loops           = max(num_wristband_loops, num_parking_loops, camper_total)
 
-            # --- MAIN PARKING ★ selection (if needed) ---
-            if main_parking_count > 0:
-                row_elem = driver.find_element(
-                    By.XPATH,
-                    f"//div[contains(@class,'ticket-type-row')]//span[contains(text(),'{MAINPARKING_LABEL}')]//ancestor::div[contains(@class,'ticket-type-row')]"
-                )
-                select = Select(row_elem.find_element(By.CSS_SELECTOR, "select.ticket-count-box"))
-                select.select_by_visible_text(str(int(main_parking_count)))
+        remaining_wristbands = wristbands_total
+        remaining_parking = parking_total
+        remaining_camper = camper_total
 
-            # --- FULL PASS ★ (wristband) selection (if needed) ---
-            if wristbands_count > 0:
-                fullpass_row = driver.find_element(
-                    By.XPATH,
-                    f"//div[contains(@class,'ticket-type-row')]//span[contains(text(),'{FULLPASS_LABEL}')]//ancestor::div[contains(@class,'ticket-type-row')]"
-                )
-                fullpass_select = Select(fullpass_row.find_element(By.CSS_SELECTOR, "select.ticket-count-box"))
-                fullpass_select.select_by_visible_text(str(int(wristbands_count)))
+        for loop_idx in range(max_loops):
+            wb_this_loop   = min(remaining_wristbands, 10)
+            park_this_loop = min(remaining_parking, 10)
+            camper_this_loop = 1 if (loop_idx == 0 and has_camper_pass) else 0
 
-            # --- CAMPER PASS + ELECTRICITY selection (if needed) ---
-            if has_camper_pass:
-                camper_row = driver.find_element(
-                    By.XPATH,
-                    f"//div[contains(@class,'ticket-type-row')]//span[contains(text(),'{CAMPERPASS_LABEL}')]//ancestor::div[contains(@class,'ticket-type-row')]"
-                )
-                camper_select = Select(camper_row.find_element(By.CSS_SELECTOR, "select.ticket-count-box"))
-                camper_select.select_by_visible_text("1")
+            # skip submissions that would do nothing (shouldn't happen but just in case)
+            if wb_this_loop == 0 and park_this_loop == 0 and camper_this_loop == 0:
+                break
 
-            # --- Scroll to and click the "Tęsti" button ---
-            continue_btn = WebDriverWait(driver, 30).until(
-                EC.element_to_be_clickable((By.XPATH, "//button[contains(text(),'Tęsti')]"))
-            )
-            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", continue_btn)
-            time.sleep(0.3)
-            continue_btn.click()
+            print(f"   Submission {loop_idx+1}: WRISTBANDS={wb_this_loop}, PARKING={park_this_loop}, CAMPER={camper_this_loop}")
 
-            wait_for_xpath("//*[contains(text(),'Pateikite informaciją')]")
-
-            try:
-                driver.find_element(By.CSS_SELECTOR, "span.clear-icon").click()
-            except Exception:
-                pass
-
-            # --- FILL EMAIL, NAME, CHECKBOXES ---
-            fill_email(email_cell)
-            fill_person_fields(name_cell)
-
-            try:
-                checkbox_ids = [
-                    "user_details_fill_form_records_order_fields_113534_0",  # 1st
-                    "user_details_fill_form_records_order_fields_113535_0",  # 2nd
-                    "user_details_fill_form_serviceAgreement",               # 3rd
-                    "user_details_fill_form_upcomingEventsSubscription",     # 4th
-                ]
-
-                for cid in checkbox_ids:
-                    try:
-                        el = driver.find_element(By.ID, cid)
-                        # Only click if not selected
-                        if not el.is_selected():
-                            driver.execute_script(
-                                "arguments[0].checked = true;"
-                                "arguments[0].dispatchEvent(new Event('input', {bubbles: true}));"
-                                "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));"
-                                , el
-                            )
-                    except Exception as e:
-                        print(f"Checkbox with id '{cid}' error: {e}")
-            except Exception as e:
-                print(f"Checkbox marking error: {e}")
-
-            # --- Update Google Sheet cells after successful processing ---
-            worksheet.update_cell(i, col_index_inv_sent+1, wristbands_cell)
-            worksheet.update_cell(i, col_index_parking_sent+1, tickets_cell)
-            if has_camper_pass:
-                worksheet.update_cell(i, col_index_camper_sent+1, "1")
-
-            any_processed = True
-
-            input(f"Row {i} processed. Press Enter to continue...")
-
-        except Exception as e:
-            print(f"Row {i}: Error during processing - {e}")
-            try:
-                driver.save_screenshot(f"debug_row_{i}.png")
-                with open(f"debug_row_{i}.html", "w", encoding="utf-8") as f:
-                    f.write(driver.page_source)
-            except Exception:
-                pass
-
-        finally:
-            close_optional_tab(switched, main_tab)
-            # Always reset to main dashboard
             driver.get(DASHBOARD_URL)
+            wait_for_xpath("//div[contains(text(),'Yaga Gathering')]")
+            driver.execute_script('let el=document.querySelector("chrome-signin-app");if(el)el.remove();')
+
+            # --- Click "Kurti užsakymą", handle tab ---
+            switched = False
+            main_tab = None
             try:
-                wait_for_xpath("//div[contains(text(),'Yaga Gathering')]")
-                driver.execute_script('let el=document.querySelector("chrome-signin-app");if(el)el.remove();')
-            except:
-                pass
+                order_btn = WebDriverWait(driver, 30).until(
+                    EC.element_to_be_clickable(
+                        (By.CSS_SELECTOR, '[class*="MuiCardActions-root"] a[title="Kurti užsakymą"][href*="yaga"]')
+                    )
+                )
+                switched, main_tab = click_and_tab_handling(order_btn)
+                wait_ready_state()
+                time.sleep(3)
+
+                # --- Wait for Event Page ---
+                wait_for_xpath("//bdo[contains(text(),'Yaga Gathering 2025')]", visible=True)
+
+                # --- MAIN PARKING ★ selection (if needed) ---
+                if park_this_loop > 0:
+                    row_elem = driver.find_element(
+                        By.XPATH,
+                        f"//div[contains(@class,'ticket-type-row')]//span[contains(text(),'{MAINPARKING_LABEL}')]//ancestor::div[contains(@class,'ticket-type-row')]"
+                    )
+                    select = Select(row_elem.find_element(By.CSS_SELECTOR, "select.ticket-count-box"))
+                    select.select_by_visible_text(str(park_this_loop))
+
+                # --- FULL PASS ★ (wristband) selection (if needed) ---
+                if wb_this_loop > 0:
+                    fullpass_row = driver.find_element(
+                        By.XPATH,
+                        f"//div[contains(@class,'ticket-type-row')]//span[contains(text(),'{FULLPASS_LABEL}')]//ancestor::div[contains(@class,'ticket-type-row')]"
+                    )
+                    fullpass_select = Select(fullpass_row.find_element(By.CSS_SELECTOR, "select.ticket-count-box"))
+                    fullpass_select.select_by_visible_text(str(wb_this_loop))
+
+                # --- CAMPER PASS + ELECTRICITY selection (if needed) ---
+                if camper_this_loop > 0:
+                    camper_row = driver.find_element(
+                        By.XPATH,
+                        f"//div[contains(@class,'ticket-type-row')]//span[contains(text(),'{CAMPERPASS_LABEL}')]//ancestor::div[contains(@class,'ticket-type-row')]"
+                    )
+                    camper_select = Select(camper_row.find_element(By.CSS_SELECTOR, "select.ticket-count-box"))
+                    camper_select.select_by_visible_text("1")
+
+                # --- Scroll to and click the "Tęsti" button ---
+                continue_btn = WebDriverWait(driver, 30).until(
+                    EC.element_to_be_clickable((By.XPATH, "//button[contains(text(),'Tęsti')]"))
+                )
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", continue_btn)
+                time.sleep(0.3)
+                continue_btn.click()
+
+                wait_for_xpath("//*[contains(text(),'Pateikite informaciją')]")
+
+                try:
+                    driver.find_element(By.CSS_SELECTOR, "span.clear-icon").click()
+                except Exception:
+                    pass
+
+                # --- FILL EMAIL, NAME, CHECKBOXES ---
+                fill_email(email_cell)
+                fill_person_fields(name_cell)
+
+                try:
+                    checkbox_ids = [
+                        "user_details_fill_form_records_order_fields_113534_0",  # 1st
+                        "user_details_fill_form_records_order_fields_113535_0",  # 2nd
+                        "user_details_fill_form_serviceAgreement",               # 3rd
+                        "user_details_fill_form_upcomingEventsSubscription",     # 4th
+                    ]
+
+                    for cid in checkbox_ids:
+                        try:
+                            el = driver.find_element(By.ID, cid)
+                            # Only click if not selected
+                            if not el.is_selected():
+                                driver.execute_script(
+                                    "arguments[0].checked = true;"
+                                    "arguments[0].dispatchEvent(new Event('input', {bubbles: true}));"
+                                    "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));"
+                                    , el
+                                )
+                        except Exception as e:
+                            print(f"Checkbox with id '{cid}' error: {e}")
+                except Exception as e:
+                    print(f"Checkbox marking error: {e}")
+
+                any_processed = True
+
+                input(f"Row {i} submission {loop_idx+1} processed. Press Enter to continue...")
+
+            except Exception as e:
+                print(f"Row {i}, submission {loop_idx+1}: Error during processing - {e}")
+                try:
+                    driver.save_screenshot(f"debug_row_{i}_submission_{loop_idx+1}.png")
+                    with open(f"debug_row_{i}_submission_{loop_idx+1}.html", "w", encoding="utf-8") as f:
+                        f.write(driver.page_source)
+                except Exception:
+                    pass
+
+            finally:
+                close_optional_tab(switched, main_tab)
+                # Always reset to main dashboard
+                driver.get(DASHBOARD_URL)
+                try:
+                    wait_for_xpath("//div[contains(text(),'Yaga Gathering')]")
+                    driver.execute_script('let el=document.querySelector("chrome-signin-app");if(el)el.remove();')
+                except:
+                    pass
+
+            # Decrease remaining tickets for next submission
+            remaining_wristbands -= wb_this_loop
+            remaining_parking -= park_this_loop
+            remaining_camper -= camper_this_loop
+
+        # After all submissions for this row are done, update sheet as before!
+        worksheet.update_cell(i, col_index_inv_sent+1, wristbands_cell)
+        worksheet.update_cell(i, col_index_parking_sent+1, tickets_cell)
+        if has_camper_pass:
+            worksheet.update_cell(i, col_index_camper_sent+1, "1")
 
     print("Finished." if any_processed else "No rows were processed.")
     input("Press Enter to close browser...")
